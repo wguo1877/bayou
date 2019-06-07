@@ -36,14 +36,14 @@ class Reader:
                 self.inputs = pickle.load(f)
             with open('data/nodes_edges_targets.txt', 'rb') as f:
                 [self.nodes , self.edges, self.targets] = pickle.load(f)
-
             config.num_batches = int(len(self.nodes) / config.batch_size)
 
         else:
             random.seed(12)
             # read the raw evidences and targets
             print('Reading data file...')
-            raw_evidences, raw_data_points  = self.read_data(clargs.input_file[0], infer, save=clargs.save)
+            print(clargs.input_file[0])
+            raw_evidences, raw_data_points = self.read_data(clargs.input_file[0], infer, save=clargs.save)
             raw_evidences = [[raw_evidence[i] for raw_evidence in raw_evidences] for i, ev in
                              enumerate(config.evidence)]
 

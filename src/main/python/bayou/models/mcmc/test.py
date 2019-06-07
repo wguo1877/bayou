@@ -32,48 +32,43 @@ from bayou.models.mcmc.data_reader import Reader
 from bayou.models.mcmc.node import plot_path
 from bayou.models.mcmc.evidence import Keywords
 
-with open('data/sample_program.json') as file:
-    evidence_dict = json.load(file)
+with open('sample_program.json') as file:
+    program_dict = json.load(file)
+
 
 def test(clargs):
-    clargs.continue_from = True #None
+    clargs.continue_from = None  # None
 
     with open(os.path.join(clargs.save, 'config.json')) as f:
         config = read_config(json.load(f), chars_vocab=True)
 
-    config.decoder.max_ast_depth = 1
-    iWantRandom = False
+    # config.decoder.max_ast_depth = 1
+    iWantRandom = True
+    # if (iWantRandom):
+    #     config.batch_size = 1
+    # else:
+    #     config.batch_size = 20
 
+    print("Loading Bayou predictor...")
+    predictor = BayesianPredictor(clargs, config)  # goes to infer.BayesianPredictor
+    print("Bayou predictor loaded!")
+
+    # list of dictionaries (each prog is a dict)
+    programs = program_dict['programs']
+
+    # breadth_first_search
     if (iWantRandom):
-        config.batch_size = 1
-    else:
-        config.batch_size = 20
-
-    predictor = BayesianPredictor(clargs.save, config) # goes to infer.BayesianPredictor
-    # testing
-    # sess.run(iterator.initializer, feed_dict=feed_dict)
-
-    # allEvSigmas = predictor.get_ev_sigma()
-    # print(allEvSigmas)
-
-    evidence = evidence_dict[clargs.evidence]
-    keywords = list(chain.from_iterable([Keywords.split_camel(c) for c in evidence['apicalls']])) + \
-        list(chain.from_iterable([Keywords.split_camel(t) for t in evidence['types']]))
-    evidence['keywords'] = list(set([k.lower() for k in keywords if k.lower() not in Keywords.STOP_WORDS]))
-    # print (evidence)
-
-    ## breadth_first_search
-    if (iWantRandom):
-        path_head = predictor.random_search(evidence)
+        path_head = predictor.random_search(programs)
         path = path_head.depth_first_search()
 
-        randI = random.randint(0,1000)
-        dot = plot_path(randI,path,1.0)
+        randI = random.randint(0, 1000)
+        dot = plot_path(randI, path, 1.0)
         # print(randI)
         # print(path)
+
+    # BEAM SEARCH
     else:
-        ## BEAM SEARCH
-        candies = predictor.beam_search(evidence, topK=config.batch_size)
+        candies = predictor.beam_search(programs, topK=config.batch_size)
         for i, candy in enumerate(candies):
              path = candy.head.depth_first_search()
              prob = candy.log_probabilty
@@ -81,31 +76,26 @@ def test(clargs):
              dot = plot_path(i,path, prob)
         #     print(path)
         #     # print()
-        jsons = predictor.get_jsons_from_beam_search(evidence, topK=config.batch_size)
-
+        jsons = predictor.get_jsons_from_beam_search(programs, topK=config.batch_size)
 
         with open('asts/output_' + clargs.evidence + '.json', 'w') as f:
-           json.dump({'evidences': evidence, 'asts': jsons}, fp=f, indent=2)
-
+           json.dump({'programs': programs, 'asts': jsons}, fp=f, indent=2)
 
     return
-
 
 
 #%%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
-
-    parser.add_argument('--python_recursion_limit', type=int, default=10000,
-                        help='set recursion limit for the Python interpreter')
+    parser.add_argument('input_file', type=str, nargs=1,
+                        help='input programs we push through the vae')
     parser.add_argument('--save', type=str, required=True,
                         help='checkpoint model during training here')
-    parser.add_argument('--evidence', type=str, default='splitter',
-                        help='use only this evidence for inference queries')
     parser.add_argument('--output_file', type=str, default=None,
                         help='output file to print probabilities')
+    parser.add_argument('--python_recursion_limit', type=int, default=10000,
+                        help='set recursion limit for the Python interpreter')
 
-    #clargs = parser.parse_args()
     clargs = parser.parse_args()
 
     if not os.path.exists(os.getcwd() + '/asts'):

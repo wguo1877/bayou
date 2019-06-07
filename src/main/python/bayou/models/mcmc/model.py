@@ -21,7 +21,7 @@ from bayou.models.mcmc.utils import get_var_list
 from bayou.models.mcmc.node import CHILD_EDGE, SIBLING_EDGE
 
 
-class Model():
+class Model:
     def __init__(self, config, iterator, infer=False, bayou_mode=True):
         assert config.model == 'lle', 'Trying to load different model implementation: ' + config.model
         self.config = config

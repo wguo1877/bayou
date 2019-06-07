@@ -22,8 +22,8 @@ class BayesianReverseEncoder(object):
     def __init__(self, config, emb, nodes, edges):
         self.inputs = [ev.placeholder(config) for ev in config.evidence]
 
-        nodes = [ nodes[ config.reverse_encoder.max_ast_depth -1 -i ] for i in range(config.reverse_encoder.max_ast_depth)]
-        edges = [ edges[ config.reverse_encoder.max_ast_depth -1 -i ] for i in range(config.reverse_encoder.max_ast_depth)]
+        nodes = [ nodes[ config.reverse_encoder.max_ast_depth - 1 - i ] for i in range(config.reverse_encoder.max_ast_depth)]
+        edges = [ edges[ config.reverse_encoder.max_ast_depth - 1 - i ] for i in range(config.reverse_encoder.max_ast_depth)]
 
         # Two halves: one set of NN for calculating the covariance and the other set for calculating the mean
         with tf.variable_scope("Covariance"):

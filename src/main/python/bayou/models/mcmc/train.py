@@ -68,7 +68,7 @@ def train(clargs):
     batched_dataset = dataset.batch(config.batch_size)
     iterator = batched_dataset.make_initializable_iterator()
 
-    model = Model(config , iterator, bayou_mode=False)
+    model = Model(config, iterator, bayou_mode=False)
 
     with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True)) as sess:
         writer = tf.summary.FileWriter(clargs.save)

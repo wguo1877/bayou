@@ -69,8 +69,6 @@ class Node():
             head = head.sibling
         return count
 
-
-
     def depth_first_search(self):
 
         buffer = []
@@ -82,7 +80,6 @@ class Node():
             dfs_id = 0
 
         while( len(stack) > 0 ):
-
             item_triple = stack.pop()
             item  = item_triple[0]
             parent_id = item_triple[1]
@@ -97,8 +94,6 @@ class Node():
             if item.child is not None:
                 stack.append((item.child, dfs_id, CHILD_EDGE))
 
-
-
             dfs_id += 1
 
         return buffer
@@ -108,7 +103,6 @@ class Node():
         while(head.sibling != None):
             head = head.sibling
         return head
-
 
 
 def get_ast_from_json(js):

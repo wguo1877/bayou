@@ -22,13 +22,13 @@ import pickle
 import json
 
 from bayou.models.mcmc.model import Model
+from bayou.models.mcmc.data_reader import Reader
 from bayou.models.mcmc.architecture import BayesianReverseEncoder, BayesianDecoder
 from bayou.models.mcmc.node import CHILD_EDGE, SIBLING_EDGE, Node
 from bayou.models.mcmc.utils import read_config
 
 MAX_GEN_UNTIL_STOP = 20
 MAX_AST_DEPTH = 5
-
 
 class TooLongPathError(Exception):
     pass
@@ -43,7 +43,7 @@ class InvalidSketchError(Exception):
 
 
 class Candidate():
-    def __init__(self,initial_state):
+    def __init__(self, initial_state):
         self.tree_currNode = Node("DSubTree")
         self.head = self.tree_currNode
 
@@ -60,32 +60,40 @@ class Candidate():
 
 class BayesianPredictor(object):
 
-    def __init__(self, save, config):
-        self.sess  = tf.InteractiveSession()
-
+    def __init__(self, clargs, config):
+        self.sess = tf.InteractiveSession()
+        self.clargs = clargs
         self.config = config
-        # load the saved config
-        self.inputs = [ev.placeholder(config) for ev in config.evidence]
-        ev_data = self.inputs
 
-        self.nodes = tf.placeholder(tf.int32, shape=(config.batch_size, config.decoder.max_ast_depth))
-        self.edges = tf.placeholder(tf.bool, shape=(config.batch_size, config.decoder.max_ast_depth))
-        self.targets = tf.placeholder(tf.int32, shape=(config.batch_size, config.decoder.max_ast_depth))
+        reader = Reader(clargs, config, dataIsThere=False)
 
-        nodes = tf.transpose(self.nodes)
-        edges = tf.transpose(self.edges)
+        # Placeholders for tf data
+        nodes_placeholder = tf.placeholder(reader.nodes.dtype, reader.nodes.shape)
+        edges_placeholder = tf.placeholder(reader.edges.dtype, reader.edges.shape)
+        targets_placeholder = tf.placeholder(reader.targets.dtype, reader.targets.shape)
+        evidence_placeholder = [tf.placeholder(input.dtype, input.shape) for input in reader.inputs]
 
-        with tf.variable_scope('Embedding'):
-            emb = tf.get_variable('emb', [config.decoder.vocab_size, config.decoder.units])
-            
-        # with tf.variable_scope("Encoder"):
-        #     self.encoder = BayesianEncoder(config, ev_data, infer=True)
-        #     samples_1 = tf.random_normal([config.batch_size, config.latent_size], mean=0., stddev=1., dtype=tf.float32)
-        #     self.psi_encoder = self.encoder.psi_mean + tf.sqrt(self.encoder.psi_covariance) * samples_1
+        # reset batches
+        feed_dict = {fp: f for fp, f in zip(evidence_placeholder, reader.inputs)}
+        feed_dict.update({nodes_placeholder: reader.nodes})
+        feed_dict.update({edges_placeholder: reader.edges})
+        feed_dict.update({targets_placeholder: reader.targets})
+
+        dataset = tf.data.Dataset.from_tensor_slices((nodes_placeholder, edges_placeholder, targets_placeholder,
+                                                      *evidence_placeholder))
+        batched_dataset = dataset.batch(config.batch_size)
+        iterator = batched_dataset.make_initializable_iterator()
+
+        # initialize the iterator and get the data
+        self.sess.run(iterator.initializer, feed_dict=feed_dict)
+        newBatch = iterator.get_next()
+        nodes, edges, targets = newBatch[:3]
+        self.nodes = tf.transpose(nodes)
+        self.edges = tf.transpose(edges)
 
         with tf.variable_scope("Reverse_Encoder"):
             embAPI = tf.get_variable('embAPI', [config.reverse_encoder.vocab_size, config.reverse_encoder.units])
-            self.reverse_encoder = BayesianReverseEncoder(config, embAPI, nodes, edges)
+            self.reverse_encoder = BayesianReverseEncoder(config, embAPI, self.nodes, self.edges)
             samples_1 = tf.random_normal([config.batch_size, config.latent_size], mean=0., stddev=1., dtype=tf.float32)
 
             # get a sample from the latent space
@@ -93,13 +101,12 @@ class BayesianPredictor(object):
 
         # setup the decoder with psi as the initial state
         with tf.variable_scope("Decoder"):
-
-            # emb = tf.get_variable('emb', [config.decoder.vocab_size, config.decoder.units])
+            emb = tf.get_variable('emb', [config.decoder.vocab_size, config.decoder.units])
             lift_w = tf.get_variable('lift_w', [config.latent_size, config.decoder.units])
             lift_b = tf.get_variable('lift_b', [config.decoder.units])
 
             self.initial_state = tf.nn.xw_plus_b(self.psi_reverse_encoder, lift_w, lift_b, name="Initial_State")
-            self.decoder = BayesianDecoder(config, emb, self.initial_state, nodes, edges)
+            self.decoder = BayesianDecoder(config, emb, self.initial_state, self.nodes, self.edges)
 
         with tf.name_scope("Loss"):
             output = tf.reshape(tf.concat(self.decoder.outputs, 1),
@@ -113,34 +120,44 @@ class BayesianPredictor(object):
         # restore the saved model
         tf.global_variables_initializer().run()
         saver = tf.train.Saver(tf.global_variables())
-        ckpt = tf.train.get_checkpoint_state(save)
+        ckpt = tf.train.get_checkpoint_state(clargs.save)
         saver.restore(self.sess, ckpt.model_checkpoint_path)
 
-    def get_state(self, evidences, num_psi_samples=1000):
-        # get the contrib from evidence to the initial state
-        rdp = [ev.read_data_point(evidences, infer=True) for ev in self.config.evidence]
-        inputs = [ev.wrangle([ev_rdp for k in range(self.config.batch_size)]) for ev, ev_rdp in zip(self.config.evidence, rdp)]
+    def get_state(self, programs, num_psi_samples=1000):
+        """
+        Gets the initial state of the decoder by sampling from the reverse encoder (or directly from the latent space).
+        :param programs: json file containing sample programs
+        :param num_psi_samples:
+        :return: initial state of decoder
+        """
+        # # read in data
+        # reader = Reader(self.clargs, self.config, infer=True, dataIsThere=False)
+        #
+        # # create feed dict of reverse encoder inputs
+        # nodes_placeholder = tf.placeholder(reader.nodes.dtype, reader.nodes.shape)
+        # edges_placeholder = tf.placeholder(reader.edges.dtype, reader.edges.shape)
+        # targets_placeholder = tf.placeholder(reader.targets.dtype, reader.targets.shape)
+        # evidence_placeholder = [tf.placeholder(input.dtype, input.shape) for input in reader.inputs]
+        #
+        # feed_dict = {fp: f for fp, f in zip(evidence_placeholder, reader.inputs)}
+        # feed_dict.update({nodes_placeholder: reader.nodes})
+        # feed_dict.update({edges_placeholder: reader.edges})
+        # feed_dict.update({targets_placeholder: reader.targets})
 
-        feed = {}
-        for j, ev in enumerate(self.config.evidence):
-            feed[self.inputs[j].name] = inputs[j]
-
-        psis = []
-        for i in range(num_psi_samples):
-            psi = self.sess.run(self.psi_reverse_encoder, feed)
-            psis.append(psi)
-        psi = np.mean(psis, axis=0)
-
+        # sequentially evaluate the reverse encoder psi and decoder initial state
+        # psi = self.sess.run(self.psi_reverse_encoder, feed_dict)
+        psi = self.sess.run(self.psi_reverse_encoder)
+        print(np.array(psi).shape)
         feed = {self.psi_reverse_encoder: psi}
         state = self.sess.run(self.initial_state, feed)
 
         return state
 
-    def beam_search(self, evidences, topK):
+    def beam_search(self, programs, topK):
 
         self.config.batch_size = topK
 
-        init_state = self.get_state(evidences)
+        init_state = self.get_state(programs, self.clargs, self.config)
 
         candies = [Candidate(init_state[0]) for k in range(topK)]
         candies[0].log_probabilty = -0.0
@@ -263,9 +280,9 @@ class BayesianPredictor(object):
 
         return new_candies
 
-    def get_jsons_from_beam_search(self, evidences, topK):
+    def get_jsons_from_beam_search(self, programs, topK):
 
-        candidates = self.beam_search(evidences, topK)
+        candidates = self.beam_search(programs, topK)
 
         candidates = [candidate for candidate in candidates if candidate.rolling is False]
         # candidates = candidates[0:1]
@@ -370,15 +387,15 @@ class BayesianPredictor(object):
         for j, ev in enumerate(self.config.evidence):
             feed[self.inputs[j].name] = inputs[j]
 
-
         [  encMean, encCovar ] = self.sess.run([ self.encoder.psi_mean , self.encoder.psi_covariance], feed)
 
         return encMean[0], encCovar[0]
 
-    def random_search(self, evidences):
+    def random_search(self, programs):
 
         # got the state, to be used subsequently
-        state = self.get_state(evidences)
+        state = self.get_state(programs)
+        print(state)
         start_node = Node("DSubTree")
         head, final_state = self.consume_siblings_until_STOP(state, start_node)
 
