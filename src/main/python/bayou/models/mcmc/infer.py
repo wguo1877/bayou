@@ -84,44 +84,17 @@ class BayesianPredictor(object):
         batched_dataset = dataset.batch(config.batch_size)
         iterator = batched_dataset.make_initializable_iterator()
 
-        # initialize the iterator and get the data
+        # initialize the model and iterator
         self.sess.run(iterator.initializer, feed_dict=feed_dict)
-        newBatch = iterator.get_next()
-        nodes, edges, targets = newBatch[:3]
-        self.nodes = tf.transpose(nodes)
-        self.edges = tf.transpose(edges)
-
-        with tf.variable_scope("Reverse_Encoder"):
-            embAPI = tf.get_variable('embAPI', [config.reverse_encoder.vocab_size, config.reverse_encoder.units])
-            self.reverse_encoder = BayesianReverseEncoder(config, embAPI, self.nodes, self.edges)
-            samples_1 = tf.random_normal([config.batch_size, config.latent_size], mean=0., stddev=1., dtype=tf.float32)
-
-            # get a sample from the latent space
-            self.psi_reverse_encoder = self.reverse_encoder.psi_mean + tf.sqrt(self.reverse_encoder.psi_covariance) * samples_1
-
-        # setup the decoder with psi as the initial state
-        with tf.variable_scope("Decoder"):
-            emb = tf.get_variable('emb', [config.decoder.vocab_size, config.decoder.units])
-            lift_w = tf.get_variable('lift_w', [config.latent_size, config.decoder.units])
-            lift_b = tf.get_variable('lift_b', [config.decoder.units])
-
-            self.initial_state = tf.nn.xw_plus_b(self.psi_reverse_encoder, lift_w, lift_b, name="Initial_State")
-            self.decoder = BayesianDecoder(config, emb, self.initial_state, self.nodes, self.edges)
-
-        with tf.name_scope("Loss"):
-            output = tf.reshape(tf.concat(self.decoder.outputs, 1),
-                                [-1, self.decoder.cell1.output_size])
-            logits = tf.matmul(output, self.decoder.projection_w) + self.decoder.projection_b
-            self.ln_probs = tf.nn.log_softmax(logits)
-            self.idx = tf.multinomial(logits, 1)
-
-            self.top_k_values, self.top_k_indices = tf.nn.top_k(self.ln_probs, k=config.batch_size)
+        self.model = Model(config, iterator, infer=True)
 
         # restore the saved model
         tf.global_variables_initializer().run()
         saver = tf.train.Saver(tf.global_variables())
         ckpt = tf.train.get_checkpoint_state(clargs.save)
         saver.restore(self.sess, ckpt.model_checkpoint_path)
+
+        self.top_k_values, self.top_k_indices = tf.nn.top_k(self.model.ln_probs, k=config.batch_size)
 
     def get_state(self, programs, num_psi_samples=1000):
         """
@@ -130,34 +103,19 @@ class BayesianPredictor(object):
         :param num_psi_samples:
         :return: initial state of decoder
         """
-        # # read in data
-        # reader = Reader(self.clargs, self.config, infer=True, dataIsThere=False)
-        #
-        # # create feed dict of reverse encoder inputs
-        # nodes_placeholder = tf.placeholder(reader.nodes.dtype, reader.nodes.shape)
-        # edges_placeholder = tf.placeholder(reader.edges.dtype, reader.edges.shape)
-        # targets_placeholder = tf.placeholder(reader.targets.dtype, reader.targets.shape)
-        # evidence_placeholder = [tf.placeholder(input.dtype, input.shape) for input in reader.inputs]
-        #
-        # feed_dict = {fp: f for fp, f in zip(evidence_placeholder, reader.inputs)}
-        # feed_dict.update({nodes_placeholder: reader.nodes})
-        # feed_dict.update({edges_placeholder: reader.edges})
-        # feed_dict.update({targets_placeholder: reader.targets})
-
         # sequentially evaluate the reverse encoder psi and decoder initial state
-        # psi = self.sess.run(self.psi_reverse_encoder, feed_dict)
-        psi = self.sess.run(self.psi_reverse_encoder)
-        print(np.array(psi).shape)
-        feed = {self.psi_reverse_encoder: psi}
-        state = self.sess.run(self.initial_state, feed)
-
+        print("Calculating latent space vector...")
+        psi = self.sess.run(self.model.psi_reverse_encoder)
+        feed = {self.model.psi_reverse_encoder: psi}
+        print("Decoding latent space vector into a sketch...")
+        state = self.sess.run(self.model.initial_state, feed)
         return state
 
     def beam_search(self, programs, topK):
 
         self.config.batch_size = topK
 
-        init_state = self.get_state(programs, self.clargs, self.config)
+        init_state = self.get_state(programs)
 
         candies = [Candidate(init_state[0]) for k in range(topK)]
         candies[0].log_probabilty = -0.0
@@ -197,15 +155,15 @@ class BayesianPredictor(object):
         states = [candy.state for candy in candies]
 
         feed = {}
-        feed[self.nodes.name] = np.array(last_item, dtype=np.int32)
-        feed[self.edges.name] = np.array(last_edge, dtype=np.bool)
-        feed[self.initial_state.name] = np.array(states)
+        feed[self.model.nodes.name] = np.array(last_item, dtype=np.int32)
+        feed[self.model.edges.name] = np.array(last_edge, dtype=np.bool)
+        feed[self.model.initial_state.name] = np.array(states)
 
-        [states, beam_ids, beam_ln_probs, top_idx] = self.sess.run([self.decoder.state, self.top_k_indices, self.top_k_values, self.idx] , feed)
+        [states, beam_ids, beam_ln_probs, top_idx] = self.sess.run([self.model.decoder.state, self.top_k_indices,
+                                                                    self.top_k_values, self.model.idx], feed)
 
         states = states[0]
         next_nodes = [[self.config.decoder.chars[idx] for idx in beam] for beam in beam_ids]
-
 
         # states is still topK * LSTM_Decoder_state_size
         # next_node is topK * topK
@@ -385,9 +343,10 @@ class BayesianPredictor(object):
 
         feed = {}
         for j, ev in enumerate(self.config.evidence):
-            feed[self.inputs[j].name] = inputs[j]
+            feed[self.model.inputs[j].name] = inputs[j]
 
-        [  encMean, encCovar ] = self.sess.run([ self.encoder.psi_mean , self.encoder.psi_covariance], feed)
+        [encMean, encCovar] = self.sess.run([self.model.reverse_encoder.psi_mean,
+                                             self.model.reverse_encoder.psi_covariance], feed)
 
         return encMean[0], encCovar[0]
 
@@ -395,19 +354,31 @@ class BayesianPredictor(object):
 
         # got the state, to be used subsequently
         state = self.get_state(programs)
-        print(state)
         start_node = Node("DSubTree")
         head, final_state = self.consume_siblings_until_STOP(state, start_node)
 
         return head.sibling
 
     def get_prediction(self, node, edge, state):
-        feed = {}
-        feed[self.nodes.name] = np.array([[self.config.decoder.vocab[node]]], dtype=np.int32)
-        feed[self.edges.name] = np.array([[edge]], dtype=np.bool)
-        feed[self.initial_state.name] = state
+        # print("-------------------------")
+        # print(self.config.decoder.vocab)
+        # feed = {}
+        # feed[self.model.nodes.name] = np.array([[self.config.decoder.vocab[node]]], dtype=np.int32)
+        # feed[self.model.edges.name] = np.array([[edge]], dtype=np.bool)
+        # feed[self.model.initial_state.name] = state
+        # if node == "DSubTree":
+        #     n = np.array([self.config.decoder.vocab[node]], dtype=np.int32)
+        # else:
+        #     n = np.array([self.config.decoder.vocab[node[-1]]], dtype=np.int32)
+        n = np.array([self.config.decoder.vocab[node]], dtype=np.int32)
+        e = np.array([edge == CHILD_EDGE], dtype=np.bool)
 
-        [state,idx] = self.sess.run([self.decoder.state, self.idx] , feed)
+        feed = {self.model.nodes[0].name: n, self.model.edges[0].name: e}
+        # # for i in range(self.config.decoder.num_layers):
+        # #     feed[self.model.decoder.initial_state[i].name] = state[i]
+        feed[self.model.initial_state.name] = state
+
+        [state, idx] = self.sess.run([self.model.decoder.state, self.model.idx], feed)
         idx = idx[0][0]
         state = state[0]
         prediction = self.config.decoder.chars[idx]
@@ -424,14 +395,20 @@ class BayesianPredictor(object):
 
         while True:
             predictionNode, state = self.get_prediction(candidate.val, SIBLING_EDGE, state)
+            print("node: ")
+            print(predictionNode.val)
+            print("--------------------")
             candidate = candidate.addAndProgressSiblingNode(predictionNode)
 
             prediction = predictionNode.val
             if prediction == 'DBranch':
+                print("Branching...")
                 candidate.child, state = self.consume_DBranch(state)
             elif prediction == 'DExcept':
+                print("Except...")
                 candidate.child, state = self.consume_DExcept(state)
             elif prediction == 'DLoop':
+                print("Looping...")
                 candidate.child, state = self.consume_DLoop(state)
             #end of inner while
 

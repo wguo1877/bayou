@@ -22,7 +22,7 @@ from bayou.models.mcmc.node import CHILD_EDGE, SIBLING_EDGE
 
 
 class Model:
-    def __init__(self, config, iterator, infer=False, bayou_mode=True):
+    def __init__(self, config, iterator, infer=False):
         assert config.model == 'lle', 'Trying to load different model implementation: ' + config.model
         self.config = config
 
@@ -31,6 +31,9 @@ class Model:
 
         nodes = tf.transpose(nodes)
         edges = tf.transpose(edges)
+
+        self.nodes = nodes
+        self.edges = edges
 
         with tf.variable_scope("Reverse_Encoder"):
             embAPI = tf.get_variable('embAPI', [config.reverse_encoder.vocab_size, config.reverse_encoder.units])
@@ -74,7 +77,7 @@ class Model:
             # self.allEvSigmas = [ ev.sigma for ev in self.config.evidence ]
             # unused if MultiGPU is being used
             with tf.name_scope("train"):
-                train_ops = get_var_list()['bayou_vars']
+                train_ops = get_var_list()['all_vars']
 
         if not infer:
             opt = tf.train.AdamOptimizer(config.learning_rate)

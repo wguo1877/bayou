@@ -35,7 +35,7 @@ class Reader:
             with open('data/inputs.txt', 'rb') as f:
                 self.inputs = pickle.load(f)
             with open('data/nodes_edges_targets.txt', 'rb') as f:
-                [self.nodes , self.edges, self.targets] = pickle.load(f)
+                [self.nodes, self.edges, self.targets] = pickle.load(f)
             config.num_batches = int(len(self.nodes) / config.batch_size)
 
         else:
@@ -55,7 +55,7 @@ class Reader:
                 raw_evidences[i] = raw_evidences[i][:sz]
             raw_data_points = raw_data_points[:sz]
 
-            # setup input and target chars/vocab
+            # setup input and target vocab
             if clargs.continue_from is None:
                 config.decoder.vocab, config.decoder.vocab_size = self.decoder_api_dict.get_call_dict()
                 config.reverse_encoder.vocab, config.reverse_encoder.vocab_size = self.decoder_api_dict.get_call_dict()

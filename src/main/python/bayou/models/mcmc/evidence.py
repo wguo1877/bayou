@@ -154,20 +154,23 @@ class Sets(Evidence):
             return latent_encoding
 
 
-
-
 class APICalls(Sets):
 
     def __init__(self):
         self.vocab = dict()
         self.vocab['None'] = 0
         self.vocab_size = 1
-
+        self.chars = []
 
     def read_data_point(self, program, infer):
         apicalls = program['apicalls'] if 'apicalls' in program else []
         return self.word2num(list(set(apicalls)) , infer)
 
+    def set_chars_vocab(self, data):
+        counts = Counter([c for apicalls in data for c in apicalls])
+        self.chars = sorted(counts.keys(), key=lambda w: counts[w], reverse=True)
+        self.vocab = dict(zip(self.chars, range(len(self.chars))))
+        self.vocab_size = len(self.vocab)
 
     @staticmethod
     def from_call(callnode):
@@ -177,16 +180,24 @@ class APICalls(Sets):
         name = name.split('<')[0]  # remove generics from call name
         return [name] if name[0].islower() else []  # Java convention
 
+
 class Types(Sets):
 
     def __init__(self):
         self.vocab = dict()
         self.vocab['None'] = 0
         self.vocab_size = 1
+        self.chars = []
 
     def read_data_point(self, program, infer):
         types = program['types'] if 'types' in program else []
         return self.word2num(list(set(types)), infer)
+
+    def set_chars_vocab(self, data):
+        counts = Counter([t for types in data for t in types])
+        self.chars = sorted(counts.keys(), key=lambda w: counts[w], reverse=True)
+        self.vocab = dict(zip(self.chars, range(len(self.chars))))
+        self.vocab_size = len(self.vocab)
 
     @staticmethod
     def get_types_re(s):
@@ -223,6 +234,7 @@ class Types(Sets):
 
         return list(set(types))
 
+
 class Keywords(Sets):
 
     def __init__(self):
@@ -231,6 +243,7 @@ class Keywords(Sets):
         self.vocab = dict()
         self.vocab['None'] = 0
         self.vocab_size = 1
+        self.chars = []
 
     STOP_WORDS = {  # CoreNLP English stop words
         "'ll", "'s", "'m", "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
@@ -259,12 +272,15 @@ class Keywords(Sets):
         w = self.lemmatizer.lemmatize(word, 'v')
         return self.lemmatizer.lemmatize(w, 'n')
 
-
     def read_data_point(self, program, infer):
         keywords = [self.lemmatize(k) for k in program['keywords']] if 'keywords' in program else []
         return self.word2num(list(set(keywords)), infer)
 
-
+    def set_chars_vocab(self, data):
+        counts = Counter([c for keywords in data for c in keywords])
+        self.chars = sorted(counts.keys(), key=lambda w: counts[w], reverse=True)
+        self.vocab = dict(zip(self.chars, range(len(self.chars))))
+        self.vocab_size = len(self.vocab)
 
     @staticmethod
     def split_camel(s):
